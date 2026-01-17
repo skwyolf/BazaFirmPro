@@ -1,0 +1,7 @@
+{
+  "name": "BazaFirm Pro - Business Lead Generator",
+  "description": "A professional tool for generating business leads using AI and Google Maps grounding. Search for companies by industry and specific regions in Poland and Germany, then export the results to Excel.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}

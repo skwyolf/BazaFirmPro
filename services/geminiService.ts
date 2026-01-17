@@ -1,49 +1,40 @@
 import { GoogleGenAI } from "@google/genai";
 
+// 1. Pobieramy klucz (musi być VITE_API_KEY w Netlify)
 const API_KEY = import.meta.env.VITE_API_KEY;
+const genAI = new GoogleGenAI(API_KEY);
 
-// Inicjalizacja klienta tylko jeśli klucz istnieje
-const genAI = API_KEY ? new GoogleGenAI(API_KEY) : null;
-
-export const translateQuery = async (query: string, country: any): Promise<string> => {
-  if (!genAI) {
-    console.error("Brak klucza API!");
-    return query;
-  }
-
+export const translateQuery = async (query: string, country: string): Promise<string> => {
   try {
-    // Próbujemy użyć nazwy 'gemini-1.5-flash' bez dodatkowych przedrostków
+    // 2. Używamy modelu gemini-1.5-flash - on istnieje i jest darmowy
     const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-    const prompt = `Przetłumacz: "${query}" na język kraju: ${country}. Zwróć tylko wynik.`;
+    const prompt = `Przetłumacz frazę: "${query}" na język kraju: ${country}. Zwróć tylko wynik.`;
     
     const result = await model.generateContent(prompt);
-    const response = await result.response;
-    return response.text().trim();
+    return result.response.text().trim();
   } catch (error) {
     console.error("Błąd tłumaczenia:", error);
-    return query; // Zwróć oryginał zamiast błędu
+    return query;
   }
 };
 
-export const fetchCompanies = async (query: string, country: any, locations: string[]): Promise<any[]> => {
-  if (!genAI) {
-    console.error("Brak klucza API!");
-    return [];
-  }
-
+export const fetchCompanies = async (query: string, country: string, locations: string[]): Promise<any[]> => {
   try {
     const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
     const loc = locations.length > 0 ? locations.join(', ') : country;
-    const prompt = `Znajdź 5 firm z branży ${query} w ${loc}. Zwróć JSON: [{"name": "...", "address": "...", "phone": "...", "website": "..."}]`;
+    
+    // 3. Skupiamy się na samym tekście, bez problematycznych narzędzi Maps/Search
+    const prompt = `Znajdź 10 firm z branży ${query} w lokalizacji ${loc}. 
+    Zwróć TYLKO czysty JSON: [{"name": "...", "address": "...", "phone": "...", "website": "..."}]`;
     
     const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const text = response.text();
+    const text = result.response.text();
     
+    // Wyciągamy JSON z odpowiedzi (AI czasem dodaje ```json ... ```)
     const jsonMatch = text.match(/\[.*\]/s);
     return jsonMatch ? JSON.parse(jsonMatch[0]) : [];
   } catch (error) {
-    console.error("Błąd pobierania danych:", error);
-    return []; // Zwróć pustą listę zamiast "nicnierobienia"
+    console.error("Błąd pobierania firm:", error);
+    return [];
   }
 };

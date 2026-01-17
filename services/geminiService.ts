@@ -1,12 +1,14 @@
-
 import { GoogleGenAI, Type } from "@google/genai";
 import { Company, Country } from "../types";
+
+// Klucz API jest wstrzykiwany przez środowisko uruchomieniowe (Netlify/Vite)
+const API_KEY = process.env.API_KEY;
 
 export const translateQuery = async (
   query: string,
   country: Country
 ): Promise<string> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const ai = new GoogleGenAI({ apiKey: API_KEY });
   
   const prompt = `Jesteś ekspertem od analizy rynkowej i tłumaczeń biznesowych. 
   Przetłumacz polską frazę branżową: "${query}" na język urzędowy kraju: ${country}.
@@ -15,12 +17,9 @@ export const translateQuery = async (
   1. Zwróć TYLKO przetłumaczony termin lub frazę, która najlepiej oddaje specyfikę branży w tym kraju.
   2. Nie dodawaj żadnych wyjaśnień, cudzysłowów ani kropek.
   3. Jeśli termin jest międzynarodowy (np. "Hotel", "IT") i brzmi tak samo, zwróć go bez zmian.
-  4. Jeśli fraza jest skomplikowana, użyj najbardziej powszecnego terminu biznesowego stosowanego w rejestrach firm.
   
   Przykłady:
-  PL: maszyny rolnicze, Kraj: Germany -> Landmaschinen
-  PL: maszyny rolnicze, Kraj: Romania -> Utilaje agricole
-  PL: hotel, Kraj: Germany -> Hotel`;
+  PL: maszyny rolnicze, Kraj: Germany -> Landmaschinen`;
 
   try {
     const response = await ai.models.generateContent({
@@ -30,7 +29,7 @@ export const translateQuery = async (
     return response.text.trim();
   } catch (error) {
     console.error("Error in translateQuery:", error);
-    return query; // Fallback to original
+    return query;
   }
 };
 
@@ -39,14 +38,15 @@ export const fetchCompanies = async (
   country: Country,
   locations: string[]
 ): Promise<Company[]> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  // Inicjalizacja instancji tuż przed wywołaniem, aby zapewnić aktualność klucza
+  const ai = new GoogleGenAI({ apiKey: API_KEY });
   
   const locationPrompt = locations.length > 0 
     ? `w wybranych regionach: ${locations.join(', ')}`
     : `w całym kraju: ${country}`;
 
   /**
-   * PROTOKÓŁ "DIRECT DOMAIN SEARCH" - FAZA 1: Discovery & Targeted Search
+   * PROTOKÓŁ "DIRECT DOMAIN SEARCH" - FAZA 1: Discovery
    */
   const discoveryPrompt = `Wykonaj zadanie zgodnie z rygorystycznym PROTOKOŁEM "DIRECT DOMAIN SEARCH" dla frazy "${query}" ${locationPrompt}.
 
@@ -59,33 +59,32 @@ ZASADY POZYSKIWANIA WWW (OBOWIĄZKOWE):
 4. JEŚLI po dedykowanym zapytaniu znajdziesz TYLKO profil na Facebooku:
    - Spróbuj wejść w profil i wyciągnąć link "Witryna". Jeśli go nie ma, zwróć link do profilu FB z dopiskiem "(Tylko FB)".
 5. FILTR JAKOŚCI:
-   - Jeśli firma ma 0 opinii i brak strony WWW (nawet FB) -> OZNACZ jako "Low Potential" i pomiń.
+   - Jeśli firma ma 0 opinii i brak strony WWW -> OZNACZ jako "Low Potential" i pomiń.
 
-WYNIK: Zwróć listę firm (do 10-15 najlepszych) z polami: nazwa, adres, telefon, rating, reviewCount oraz surowy link WWW.`;
+WYNIK: Zwróć listę firm (do 15 rekordów) z polami: nazwa, adres, telefon, rating, reviewCount oraz surowy link WWW.`;
 
   try {
     const discoveryResponse = await ai.models.generateContent({
-      model: "gemini-2.5-flash", 
+      model: "gemini-3-flash-preview", 
       contents: discoveryPrompt,
       config: {
         tools: [{ googleMaps: {} }, { googleSearch: {} }],
-        thinkingConfig: { thinkingBudget: 0 }
       },
     });
 
     const discoveryText = discoveryResponse.text || "";
     
     /**
-     * FAZA 2: Rygorystyczna Weryfikacja i Formatowanie Wyjścia
+     * FAZA 2: Rygorystyczna Weryfikacja (Gemini 3 Pro)
      */
-    const enrichmentPrompt = `Przeanalizuj poniższe dane i przygotuj finalny JSON. Skup się na czystości adresów WWW.
+    const enrichmentPrompt = `Przeanalizuj poniższe dane i przygotuj finalny JSON. Skup się na czystości adresów WWW i formacie danych.
 
 DANE WEJŚCIOWE:
 ${discoveryText}
 
 ZASADY FINALNEJ WERYFIKACJI:
 1. "Strona WWW" musi być najbardziej prawdopodobnym linkiem bezpośrednim.
-2. Jeśli link prowadzi do aggregatora (FB, LinkedIn itp.), zamień go na "Wymaga weryfikacji ręcznej", CHYBA ŻE jest to jedyny kontakt - wtedy dopisz "(Tylko FB)".
+2. Jeśli link prowadzi do aggregatora (FB, LinkedIn itp.), zamień go na "Wymaga weryfikacji ręcznej", CHYBA ŻE jest to profil Facebook z dopiskiem "(Tylko FB)".
 3. Jeśli adres WWW to czysta domena (np. www.firma.com), zostaw ją jako priorytet.
 4. Usuń firmy bez telefonu lub bez adresu.
 5. Sformatuj telefony do standardu międzynarodowego.
@@ -105,7 +104,7 @@ Zwróć JSON (tablica obiektów).`;
               name: { type: Type.STRING },
               address: { type: Type.STRING },
               phone: { type: Type.STRING },
-              website: { type: Type.STRING, description: "Official domain, 'Strona WWW (Tylko FB)' or 'Wymaga weryfikacji ręcznej'" },
+              website: { type: Type.STRING },
               rating: { type: Type.NUMBER, nullable: true },
               reviewCount: { type: Type.NUMBER, nullable: true }
             },
@@ -117,7 +116,7 @@ Zwróć JSON (tablica obiektów).`;
 
     const results = JSON.parse(enrichmentResponse.text.trim()) as Company[];
 
-    // Ostatnia linia obrony - czyszczenie aggregatów
+    // Dodatkowe czyszczenie aggregatów
     const aggregatorKeywords = [
       'instagram.com', 'linkedin.com', 'yelp.', 'tripadvisor.', 
       'panoramafirm.pl', 'pkt.pl', 'yellowpages', 'dastelefonbuch', 
@@ -127,12 +126,10 @@ Zwróć JSON (tablica obiektów).`;
     return results.map(c => {
       let url = c.website || 'Wymaga weryfikacji ręcznej';
       
-      // Jeśli to Facebook, pozwalamy tylko jeśli ma dopisek (Tylko FB) zgodnie z instrukcją formatowania
       if (url.toLowerCase().includes('facebook.com') && !url.includes('(Tylko FB)')) {
         url = url + ' (Tylko FB)';
       }
 
-      // Całkowita blokada innych aggregatów
       if (aggregatorKeywords.some(term => url.toLowerCase().includes(term))) {
         url = 'Wymaga weryfikacji ręcznej';
       }
@@ -141,7 +138,7 @@ Zwróć JSON (tablica obiektów).`;
     });
 
   } catch (error) {
-    console.error("Critical error in fetchCompanies with Direct Domain Protocol:", error);
+    console.error("Critical error in fetchCompanies:", error);
     throw error;
   }
 };
